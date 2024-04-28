@@ -16,3 +16,4 @@
    
 
 ### proposal
+I am planning on implementing a blog app for songs, where users can share song data with each other via a p2p network. You can add songs, make them public, list songs (either local ones or of discovered peers), and list peers. 
