@@ -15,6 +15,7 @@ use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use tokio::{fs, io::AsyncBufReadExt, sync::mpsc};
+use dialoguer::{Input, Confirm};
 
 const STORAGE_FILE_PATH: &str = "./songs.json";
 
@@ -160,6 +161,9 @@ async fn create_new_song(title: &str, artist: &str, lyrics: &str, explicit: &str
     info!("Lyrics:: {}", lyrics);
     info!("Explicit:: {}", explicit);
 
+    println!("Created Song");
+    println!("-----------------");
+    println!("{}", title);
     Ok(())
 }
 
@@ -189,7 +193,15 @@ async fn write_local_songs(songs: &Songs) -> Result<()> {
 async fn main() {
     pretty_env_logger::init();
 
-    info!("Peer Id: {}", PEER_ID.clone());
+    println!("\n\n\n###        Welcome to Spotify Blog!        ###\n\n");
+    println!("Available Commands");
+    println!("===================");
+    println!("list peers           - Prints a list of all peers on the network");
+    println!("list songs           - Prints a list of all songs");
+    println!("create song          - Creates a new song");
+    println!("publish song <num>   - Publishes the song at the specified number");
+    println!("\n\n\nYour peer id is: {}\n\n\n", PEER_ID.clone());
+
     let (response_sender, mut response_rcv) = mpsc::unbounded_channel();
 
     let auth_keys = Keypair::<X25519Spec>::new()
@@ -268,7 +280,7 @@ async fn handle_list_peers(swarm: &mut Swarm<SongBehaviour>) {
     for peer in nodes {
         unique_peers.insert(peer);
     }
-    unique_peers.iter().for_each(|p| info!("{}", p));
+    unique_peers.iter().for_each(|p| println!("{}", p));
 }
 
 async fn handle_list_songs(cmd: &str, swarm: &mut Swarm<SongBehaviour>) {
@@ -298,7 +310,24 @@ async fn handle_list_songs(cmd: &str, swarm: &mut Swarm<SongBehaviour>) {
             match read_local_songs().await {
                 Ok(v) => {
                     info!("Local Songs ({})", v.len());
-                    v.iter().for_each(|r| info!("{:?}", r));
+                    println!("#################");
+                    println!("#  Local Songs  #");
+                    println!("#################\n\n\n");
+                    println!("Id      Title           Artist            Lyrics")
+                    println!("======= =============== ================= ===============\n");
+                    v.iter().for_each(|song| {
+                        let mut title = song.title.clone();
+                        
+                        let truth_value = matches!(&*song.explicit, "true" | "t" | "1" | "True" | "yes" | "Yes" | "y" | "Y" | "T");
+                        if truth_value {
+                            title += " 🅴";
+                        }
+                        
+                        println!("[{}]", song.id);
+                        println!("Title: {}", title);
+                        println!("Artist: {}", song.artist);
+                        println!("Lyrics: {}\n\n\n", song.lyrics);
+                    });
                 }
                 Err(e) => error!("error fetching local songs: {}", e),
             };
@@ -307,18 +336,19 @@ async fn handle_list_songs(cmd: &str, swarm: &mut Swarm<SongBehaviour>) {
 }
 
 async fn handle_create_song(cmd: &str) {
-    if let Some(rest) = cmd.strip_prefix("create song") {
-        let elements: Vec<&str> = rest.split("|").collect();
-        if elements.len() < 3 {
-            info!("too few arguments - Format: title|artist|lyrics|explicit");
+    if let Some(_rest) = cmd.strip_prefix("create song") {
+
+        let input_title = Input::<String>::new().with_prompt("Title").interact().unwrap();
+        let input_artist = Input::<String>::new().with_prompt("Artist").interact().unwrap();
+        let input_lyrics = Input::<String>::new().with_prompt("Lyrics").interact().unwrap();
+        let input_explicit = Confirm::new().with_prompt("Explicit").default(true).interact().unwrap().to_string();
+
+        if input_title.is_empty() || input_artist.is_empty() || input_lyrics.is_empty() {
+            info!("too few arguments -- need title, artist, lyrics, and explicit");
         } else {
-            let title = elements.get(0).expect("title is there");
-            let artist = elements.get(1).expect("artist is there");
-            let lyrics = elements.get(2).expect("lyrics are there");
-            let explicit = elements.get(3).expect("explicit is there");
-            if let Err(e) = create_new_song(title, artist, lyrics, explicit).await {
+            if let Err(e) = create_new_song(&input_title, &input_artist, &input_lyrics, &input_explicit).await {
                 error!("error creating song: {}", e);
-            };
+            }
         }
     }
 }
