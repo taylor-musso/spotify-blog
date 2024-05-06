@@ -313,8 +313,8 @@ async fn handle_list_songs(cmd: &str, swarm: &mut Swarm<SongBehaviour>) {
                     println!("#################");
                     println!("#  Local Songs  #");
                     println!("#################\n\n\n");
-                    println!("Id      Title           Artist            Lyrics")
-                    println!("======= =============== ================= ===============\n");
+                    println!("Id      Title                  Artist               Lyrics");
+                    println!("======= ====================== ==================== =======================\n");
                     v.iter().for_each(|song| {
                         let mut title = song.title.clone();
                         
@@ -323,10 +323,11 @@ async fn handle_list_songs(cmd: &str, swarm: &mut Swarm<SongBehaviour>) {
                             title += " 🅴";
                         }
                         
-                        println!("[{}]", song.id);
-                        println!("Title: {}", title);
-                        println!("Artist: {}", song.artist);
-                        println!("Lyrics: {}\n\n\n", song.lyrics);
+                        println!("{:7} {:<22} {:<20} {:<24}", 
+                        format!("[{}]", song.id), 
+                        format!("{:22}", truncate_string(&title, 20)), 
+                        format!("{:20}", truncate_string(&song.artist, 16)), 
+                        format!("{:24}", truncate_string(&song.lyrics, 24)));
                     });
                 }
                 Err(e) => error!("error fetching local songs: {}", e),
@@ -365,5 +366,13 @@ async fn handle_publish_song(cmd: &str) {
             }
             Err(e) => error!("invalid id: {}, {}", rest.trim(), e),
         };
+    }
+}
+
+fn truncate_string(s: &str, max_len: usize) -> String {
+    if s.len() > max_len {
+        format!("{}...", &s[..max_len - 3])
+    } else {
+        format!("{:<1$}", s, max_len)
     }
 }
