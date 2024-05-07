@@ -195,6 +195,27 @@ async fn delete_song(id: usize) -> Result<()> {
     Ok(())
 }
 
+async fn lyrics(id: usize) -> Result<()> {
+    let local_songs = read_local_songs().await?;
+    let song_opt = local_songs.iter().find(|song| song.id == id);
+
+    match song_opt {
+        Some(song) => {
+            println!("\n\n\n##############");
+            println!("#   Lyrics   #");
+            println!("##############\n\n");
+            println!("{}       | by {}", song.title, song.artist);
+            println!("==================================\n\n");
+            println!("{}", song.lyrics);
+            Ok(())
+        },
+        None => {
+            println!("Song with ID {} not found.", id);
+            Ok(())
+        }
+    }
+}
+
 async fn publish_song(id: usize) -> Result<()> {
     let mut local_songs = read_local_songs().await?;
     local_songs
@@ -249,6 +270,7 @@ async fn main() {
     println!("delete song <id>     - Deletes the song at the specified id");
     println!("publish song <id>    - Publishes the song at the specified id");
     println!("private song <id>    - Privates the song at the specified id");
+    println!("lyrics <id>          - Prints the lyrics to the song at the specified id");
     
     println!("\n\n\nYour peer id is: {}\n\n\n", PEER_ID.clone());
 
@@ -322,6 +344,7 @@ async fn main() {
                     cmd if cmd.starts_with("delete song") => handle_delete_song(cmd).await,
                     cmd if cmd.starts_with("publish song") => handle_publish_song(cmd).await,
                     cmd if cmd.starts_with("private song") => handle_private_song(cmd).await,
+                    cmd if cmd.starts_with("lyrics") => handle_lyrics(cmd).await,
                     _ => error!("unknown command"),
                 },
             }
@@ -450,6 +473,20 @@ async fn handle_delete_song(cmd: &str) {
         };
     }
 }
+
+async fn handle_lyrics(cmd: &str) {
+    if let Some(rest) = cmd.strip_prefix("lyrics") {
+        match rest.trim().parse::<usize>() {
+            Ok(id) => {
+                if let Err(e) = lyrics(id).await {
+                    println!("Error deleting song with id {}: {}", id, e);
+                } 
+            }
+            Err(e) => println!("Invalid id: {}, {}", rest.trim(), e),
+        };
+    }
+}
+
 
 
 async fn handle_chat(swarm: &mut Swarm<SongBehaviour>) {
