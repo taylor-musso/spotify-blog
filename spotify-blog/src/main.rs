@@ -54,6 +54,11 @@ struct ListResponse {
     receiver: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct ChatMessage {
+    msg: String,
+}
+
 enum EventType {
     Response(ListResponse),
     Input(String),
@@ -64,7 +69,10 @@ struct SongBehaviour {
     floodsub: Floodsub,
     mdns: Mdns,
     #[behaviour(ignore)]
-    response_sender: mpsc::UnboundedSender<ListResponse>,
+    song_response_sender: mpsc::UnboundedSender<ListResponse>,
+    #[behaviour(ignore)]
+    chat_message_sender: mpsc::UnboundedSender<ChatMessage>,
+    
 }
 
 impl NetworkBehaviourEventProcess<FloodsubEvent> for SongBehaviour {
@@ -73,15 +81,17 @@ impl NetworkBehaviourEventProcess<FloodsubEvent> for SongBehaviour {
             FloodsubEvent::Message(msg) => {
                 if let Ok(resp) = serde_json::from_slice::<ListResponse>(&msg.data) {
                     if resp.receiver == PEER_ID.to_string() {
-                        info!("Response from {}:", msg.source);
-                        resp.data.iter().for_each(|r| info!("{:?}", r));
+                    println!("Response from {}:\n\n\n", msg.source);
+                    println!("Id      Title                  Artist               Lyrics");
+                    println!("======= ====================== ==================== =======================\n");
+                    resp.data.iter().for_each(|r| print_song(r));
                     }
                 } else if let Ok(req) = serde_json::from_slice::<ListRequest>(&msg.data) {
                     match req.mode {
                         ListMode::ALL => {
                             info!("Received ALL req: {:?} from {:?}", req, msg.source);
                             respond_with_public_songs(
-                                self.response_sender.clone(),
+                                self.song_response_sender.clone(),
                                 msg.source.to_string(),
                             );
                         }
@@ -89,12 +99,16 @@ impl NetworkBehaviourEventProcess<FloodsubEvent> for SongBehaviour {
                             if peer_id == &PEER_ID.to_string() {
                                 info!("Received req: {:?} from {:?}", req, msg.source);
                                 respond_with_public_songs(
-                                    self.response_sender.clone(),
+                                    self.song_response_sender.clone(),
                                     msg.source.to_string(),
                                 );
                             }
                         }
                     }
+                } else if let Ok(chat_msg) = serde_json::from_slice::<ChatMessage>(&msg.data) {
+                    let p = msg.source.to_string();
+                    let p = p[p.len() - 4..].to_string();
+                    println!("From [{}]: {}", p, chat_msg.msg);
                 }
             }
             _ => (),
@@ -155,12 +169,6 @@ async fn create_new_song(title: &str, artist: &str, lyrics: &str, explicit: &str
     });
     write_local_songs(&local_songs).await?;
 
-    info!("Created song:");
-    info!("Title: {}", title);
-    info!("Artist: {}", artist);
-    info!("Lyrics:: {}", lyrics);
-    info!("Explicit:: {}", explicit);
-
     println!("Created Song");
     println!("-----------------");
     println!("{}", title);
@@ -196,13 +204,20 @@ async fn main() {
     println!("\n\n\n###        Welcome to Spotify Blog!        ###\n\n");
     println!("Available Commands");
     println!("===================");
+    println!("[other]");
     println!("list peers           - Prints a list of all peers on the network");
-    println!("list songs           - Prints a list of all songs");
+    println!("chat                 - Enter chat mode\n");
+    println!("[songs]");
+    println!("list songs           - Prints a list of all local songs");
+    println!("list songs all       - Prints a list of all songs from peers");
+    println!("list songs <peer id> - Prints a list of all songs from specified peer");
     println!("create song          - Creates a new song");
     println!("publish song <num>   - Publishes the song at the specified number");
+    
     println!("\n\n\nYour peer id is: {}\n\n\n", PEER_ID.clone());
 
-    let (response_sender, mut response_rcv) = mpsc::unbounded_channel();
+    let (song_response_sender, mut response_rcv) = mpsc::unbounded_channel();
+    let (chat_message_sender, mut chat_rcv) = mpsc::unbounded_channel();
 
     let auth_keys = Keypair::<X25519Spec>::new()
         .into_authentic(&KEYS)
@@ -210,7 +225,7 @@ async fn main() {
 
     let transp = TokioTcpConfig::new()
         .upgrade(upgrade::Version::V1)
-        .authenticate(NoiseConfig::xx(auth_keys).into_authenticated()) // XX Handshake pattern, IX exists as well and IK - only XX currently provides interop with other libp2p impls
+        .authenticate(NoiseConfig::xx(auth_keys).into_authenticated())
         .multiplex(mplex::MplexConfig::new())
         .boxed();
 
@@ -219,7 +234,8 @@ async fn main() {
         mdns: Mdns::new(Default::default())
             .await
             .expect("can create mdns"),
-        response_sender,
+        song_response_sender,
+        chat_message_sender,
     };
 
     behaviour.floodsub.subscribe(TOPIC.clone());
@@ -245,7 +261,8 @@ async fn main() {
             tokio::select! {
                 line = stdin.next_line() => Some(EventType::Input(line.expect("can get line").expect("can read line from stdin"))),
                 response = response_rcv.recv() => Some(EventType::Response(response.expect("response exists"))),
-                event = swarm.select_next_some() => {
+                chat_msg = chat_rcv.recv() => Some(EventType::Input(chat_msg.expect("chat message exists").msg)), 
+                event = swarm.select_next_some() =>  {
                     info!("Unhandled Swarm Event: {:?}", event);
                     None
                 },
@@ -255,26 +272,31 @@ async fn main() {
         if let Some(event) = evt {
             match event {
                 EventType::Response(resp) => {
+                    println!("response");
                     let json = serde_json::to_string(&resp).expect("can jsonify response");
                     swarm
                         .behaviour_mut()
                         .floodsub
                         .publish(TOPIC.clone(), json.as_bytes());
                 }
-                EventType::Input(line) => match line.as_str() {
+                EventType::Input(line) => match line.trim() {
                     "list peers" => handle_list_peers(&mut swarm).await,
+                    "chat" => handle_chat(&mut swarm).await,
                     cmd if cmd.starts_with("list songs") => handle_list_songs(cmd, &mut swarm).await,
                     cmd if cmd.starts_with("create song") => handle_create_song(cmd).await,
                     cmd if cmd.starts_with("publish song") => handle_publish_song(cmd).await,
                     _ => error!("unknown command"),
                 },
             }
+
         }
     }
 }
 
 async fn handle_list_peers(swarm: &mut Swarm<SongBehaviour>) {
-    info!("Discovered Peers:");
+    println!("\n\n\n\n######################");
+    println!("#  Discovered Peers  #");
+    println!("######################\n\n");
     let nodes = swarm.behaviour().mdns.discovered_nodes();
     let mut unique_peers = HashSet::new();
     for peer in nodes {
@@ -287,6 +309,9 @@ async fn handle_list_songs(cmd: &str, swarm: &mut Swarm<SongBehaviour>) {
     let rest = cmd.strip_prefix("list songs ");
     match rest {
         Some("all") => {
+            println!("\n\n\n\n################");
+            println!("#  Peer Songs  #");
+            println!("################\n");
             let req = ListRequest {
                 mode: ListMode::ALL,
             };
@@ -297,6 +322,9 @@ async fn handle_list_songs(cmd: &str, swarm: &mut Swarm<SongBehaviour>) {
                 .publish(TOPIC.clone(), json.as_bytes());
         }
         Some(songs_peer_id) => {
+            println!("\n\n\n\n################");
+            println!("#  Peer Songs  #");
+            println!("################\n");
             let req = ListRequest {
                 mode: ListMode::One(songs_peer_id.to_owned()),
             };
@@ -310,25 +338,12 @@ async fn handle_list_songs(cmd: &str, swarm: &mut Swarm<SongBehaviour>) {
             match read_local_songs().await {
                 Ok(v) => {
                     info!("Local Songs ({})", v.len());
-                    println!("#################");
+                    println!("\n\n\n\n#################");
                     println!("#  Local Songs  #");
                     println!("#################\n\n\n");
                     println!("Id      Title                  Artist               Lyrics");
                     println!("======= ====================== ==================== =======================\n");
-                    v.iter().for_each(|song| {
-                        let mut title = song.title.clone();
-                        
-                        let truth_value = matches!(&*song.explicit, "true" | "t" | "1" | "True" | "yes" | "Yes" | "y" | "Y" | "T");
-                        if truth_value {
-                            title += " 🅴";
-                        }
-                        
-                        println!("{:7} {:<22} {:<20} {:<24}", 
-                        format!("[{}]", song.id), 
-                        format!("{:22}", truncate_string(&title, 20)), 
-                        format!("{:20}", truncate_string(&song.artist, 16)), 
-                        format!("{:24}", truncate_string(&song.lyrics, 24)));
-                    });
+                    v.iter().for_each(|song| print_song(song));
                 }
                 Err(e) => error!("error fetching local songs: {}", e),
             };
@@ -345,7 +360,7 @@ async fn handle_create_song(cmd: &str) {
         let input_explicit = Confirm::new().with_prompt("Explicit").default(true).interact().unwrap().to_string();
 
         if input_title.is_empty() || input_artist.is_empty() || input_lyrics.is_empty() {
-            info!("too few arguments -- need title, artist, lyrics, and explicit");
+            println!("too few arguments -- need title, artist, lyrics, and explicit");
         } else {
             if let Err(e) = create_new_song(&input_title, &input_artist, &input_lyrics, &input_explicit).await {
                 error!("error creating song: {}", e);
@@ -359,14 +374,24 @@ async fn handle_publish_song(cmd: &str) {
         match rest.trim().parse::<usize>() {
             Ok(id) => {
                 if let Err(e) = publish_song(id).await {
-                    info!("error publishing song with id {}, {}", id, e)
+                    println!("error publishing song with id {}, {}", id, e)
                 } else {
-                    info!("Published Song with id: {}", id);
+                    println!("Published Song with id: {}", id);
                 }
             }
             Err(e) => error!("invalid id: {}, {}", rest.trim(), e),
         };
     }
+}
+
+async fn handle_chat(swarm: &mut Swarm<SongBehaviour>) {
+    let input_msg = Input::<String>::new().with_prompt("Message").interact().unwrap();
+    let chat_msg = ChatMessage { msg: input_msg };
+    let json = serde_json::to_string(&chat_msg).expect("can jsonify chat message");
+    swarm
+        .behaviour_mut()
+        .floodsub
+        .publish(TOPIC.clone(), json.as_bytes()); 
 }
 
 fn truncate_string(s: &str, max_len: usize) -> String {
@@ -375,4 +400,21 @@ fn truncate_string(s: &str, max_len: usize) -> String {
     } else {
         format!("{:<1$}", s, max_len)
     }
+}
+
+fn print_song(song: &Song) {
+    let mut title = song.title.clone();
+    title = title.trim_start().to_string();
+                        
+    let truth_value = matches!(&*song.explicit, "true" | "t" | "1" | "True" | "yes" | "Yes" | "y" | "Y" | "T");
+    if truth_value {
+        title += " 🅴";
+    }
+                        
+    println!("{:7} {:<22} {:<20} {:<24}", 
+        format!("[{}]", song.id), 
+        format!("{:22}", truncate_string(&title, 20)), 
+        format!("{:20}", truncate_string(&song.artist, 16)), 
+        format!("{:24}", truncate_string(&song.lyrics, 24))
+    );
 }
