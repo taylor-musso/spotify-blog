@@ -170,9 +170,28 @@ async fn create_new_song(title: &str, artist: &str, lyrics: &str, explicit: &str
     });
     write_local_songs(&local_songs).await?;
 
-    println!("Created Song");
-    println!("-----------------");
-    println!("{}", title);
+    println!("\n\nCreated Song");
+    println!("================");
+    let new_song = Song {
+        id: new_id,
+        title: title.to_owned(),
+        artist: artist.to_owned(),
+        lyrics: lyrics.to_owned(),
+        explicit: explicit.to_owned(),
+        public: false,
+    };
+    print_song(&new_song);
+    Ok(())
+}
+
+async fn delete_song(id: usize) -> Result<()> {
+    let mut local_songs = read_local_songs().await?;
+    if let Some(index) = local_songs.iter().position(|song| song.id == id) {
+        local_songs.remove(index);
+        write_local_songs(&local_songs).await?;
+    } else {
+        println!("Song with id {} not found.", id);
+    }
     Ok(())
 }
 
@@ -212,7 +231,11 @@ async fn write_local_songs(songs: &Songs) -> Result<()> {
 async fn main() {
     pretty_env_logger::init();
 
-    println!("\n\n\n###        Welcome to Spotify Blog!        ###\n\n");
+    println!("\n\n\n##############################################");
+    println!("###                                        ###");
+    println!("###        Welcome to Spotify Blog!        ###");
+    println!("###                                        ###");
+    println!("##############################################\n\n");
     println!("Available Commands");
     println!("===================");
     println!("[other]");
@@ -223,7 +246,9 @@ async fn main() {
     println!("list songs all       - Prints a list of all songs from peers");
     println!("list songs <peer id> - Prints a list of all songs from specified peer");
     println!("create song          - Creates a new song");
-    println!("publish song <num>   - Publishes the song at the specified number");
+    println!("delete song <id>     - Deletes the song at the specified id");
+    println!("publish song <id>    - Publishes the song at the specified id");
+    println!("private song <id>    - Privates the song at the specified id");
     
     println!("\n\n\nYour peer id is: {}\n\n\n", PEER_ID.clone());
 
@@ -294,6 +319,7 @@ async fn main() {
                     "chat" => handle_chat(&mut swarm).await,
                     cmd if cmd.starts_with("list songs") => handle_list_songs(cmd, &mut swarm).await,
                     cmd if cmd.starts_with("create song") => handle_create_song(cmd).await,
+                    cmd if cmd.starts_with("delete song") => handle_delete_song(cmd).await,
                     cmd if cmd.starts_with("publish song") => handle_publish_song(cmd).await,
                     cmd if cmd.starts_with("private song") => handle_private_song(cmd).await,
                     _ => error!("unknown command"),
@@ -406,6 +432,21 @@ async fn handle_private_song(cmd: &str) {
                 }
             }
             Err(e) => error!("invalid id: {}, {}", rest.trim(), e),
+        };
+    }
+}
+
+async fn handle_delete_song(cmd: &str) {
+    if let Some(rest) = cmd.strip_prefix("delete song") {
+        match rest.trim().parse::<usize>() {
+            Ok(id) => {
+                if let Err(e) = delete_song(id).await {
+                    println!("Error deleting song with id {}: {}", id, e);
+                } else {
+                    println!("Deleted song with id: {}", id);
+                }
+            }
+            Err(e) => println!("Invalid id: {}, {}", rest.trim(), e),
         };
     }
 }
