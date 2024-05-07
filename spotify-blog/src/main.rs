@@ -71,6 +71,7 @@ struct SongBehaviour {
     #[behaviour(ignore)]
     song_response_sender: mpsc::UnboundedSender<ListResponse>,
     #[behaviour(ignore)]
+    #[allow(dead_code)]
     chat_message_sender: mpsc::UnboundedSender<ChatMessage>,
     
 }
@@ -185,6 +186,16 @@ async fn publish_song(id: usize) -> Result<()> {
     Ok(())
 }
 
+async fn private_song(id: usize) -> Result<()> {
+    let mut local_songs = read_local_songs().await?;
+    local_songs
+        .iter_mut()
+        .filter(|r| r.id == id)
+        .for_each(|r| r.public = false);
+    write_local_songs(&local_songs).await?;
+    Ok(())
+}
+
 async fn read_local_songs() -> Result<Songs> {
     let content = fs::read(STORAGE_FILE_PATH).await?;
     let result = serde_json::from_slice(&content)?;
@@ -206,7 +217,7 @@ async fn main() {
     println!("===================");
     println!("[other]");
     println!("list peers           - Prints a list of all peers on the network");
-    println!("chat                 - Enter chat mode\n");
+    println!("chat                 - Send a message to all peers\n");
     println!("[songs]");
     println!("list songs           - Prints a list of all local songs");
     println!("list songs all       - Prints a list of all songs from peers");
@@ -272,7 +283,6 @@ async fn main() {
         if let Some(event) = evt {
             match event {
                 EventType::Response(resp) => {
-                    println!("response");
                     let json = serde_json::to_string(&resp).expect("can jsonify response");
                     swarm
                         .behaviour_mut()
@@ -285,6 +295,7 @@ async fn main() {
                     cmd if cmd.starts_with("list songs") => handle_list_songs(cmd, &mut swarm).await,
                     cmd if cmd.starts_with("create song") => handle_create_song(cmd).await,
                     cmd if cmd.starts_with("publish song") => handle_publish_song(cmd).await,
+                    cmd if cmd.starts_with("private song") => handle_private_song(cmd).await,
                     _ => error!("unknown command"),
                 },
             }
@@ -376,13 +387,29 @@ async fn handle_publish_song(cmd: &str) {
                 if let Err(e) = publish_song(id).await {
                     println!("error publishing song with id {}, {}", id, e)
                 } else {
-                    println!("Published Song with id: {}", id);
+                    println!("Published song with id: {}", id);
                 }
             }
             Err(e) => error!("invalid id: {}, {}", rest.trim(), e),
         };
     }
 }
+
+async fn handle_private_song(cmd: &str) {
+    if let Some(rest) = cmd.strip_prefix("private song") {
+        match rest.trim().parse::<usize>() {
+            Ok(id) => {
+                if let Err(e) = private_song(id).await {
+                    println!("error privating song with id {}, {}", id, e)
+                } else {
+                    println!("Privated song with id: {}", id);
+                }
+            }
+            Err(e) => error!("invalid id: {}, {}", rest.trim(), e),
+        };
+    }
+}
+
 
 async fn handle_chat(swarm: &mut Swarm<SongBehaviour>) {
     let input_msg = Input::<String>::new().with_prompt("Message").interact().unwrap();
